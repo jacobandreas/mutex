@@ -32,8 +32,8 @@ This can be viewed as a form of posterior regularization and specifically
   &\leq -\sum_i \log p_\theta(y_i \mid x_i) + \lambda H(p_2) -  \lambda E_{y \sim p_2(y)}
   E_{x \sim p_\eta} \log p_\theta(y \mid x) \\
   \intertext{(Jensen)}
-  \min_{\theta, \eta, \phi} ~~ &\leq -\sum_i \log p_\theta(y_i \mid x_i) + \lambda H(p_2) -  \lambda E_{y \sim p_2(y)}
-  E_{x \sim q_\phi(x \mid y)} [\log p_\theta(y \mid x) - \KL{q_\phi(x \mid y)}
+  \min_{\theta, \eta, \phi} ~~ &\leq -\sum_i \log p_\theta(y_i \mid x_i) + \lambda H(p_2) -  \lambda E_{y \sim p_2(y)}[
+  E_{x \sim q_\phi(x \mid y)} [\log p_\theta(y \mid x)] - \KL{q_\phi(x \mid y)}
   {p_\eta(x)}]
 \end{align}
 (ELBO)
