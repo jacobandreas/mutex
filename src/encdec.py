@@ -92,8 +92,7 @@ class EncDec(nn.Module):
     def logprob(self, inp, out):
         hid, state = self.encoder(inp)
         hid = self.proj(hid)
-        state = self.pass_hiddens(state)
-        return self.decoder.logprob(out, rnn_state=state)
+        return self.decoder.logprob(out, rnn_state=self.pass_hiddens(state))
 
     def sample(
             self, 
@@ -121,5 +120,4 @@ class EncDec(nn.Module):
         hid, state = self.encoder(inp)
         hid = self.proj(hid)
         state = self.pass_hiddens(state)
-        
         return self.decoder.sample_with_gumbel(state, max_len, temp=temp)
