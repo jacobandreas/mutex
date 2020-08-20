@@ -7,6 +7,7 @@ import random
 from data import Oracle
 import collections
 from itertools import combinations, product
+import math
 
 LossTrack = collections.namedtuple('LossTrack', 'nll mlogpyx pointkl')
 
@@ -85,44 +86,43 @@ class Mutex(nn.Module):
     def forward(self, inp, out):
         nll = self.pyx(inp, out)
         
-        ys = self.py.sample(self.Nsample, self.max_len)
         
+        ys  = self.py.sample(self.Nsample, self.max_len)
+#         Hpy = math.log(len(self.py.vocab_y())) #
+        # For Expactation term
         if isinstance(self.qxy, Oracle):
             xs = self.qxy.sample(ys, self.max_len)
         else:
-            with torch.no_grad():
-                xs, _ = self.qxy.sample_with_gumbel(ys, self.max_len, temp=self.temp)
-        
+            #with torch.no_grad():
+            xs, _ = self.qxy.sample_with_gumbel(ys, self.max_len, temp=self.temp)        
+                
         logprob_pyx = -self.pyx(xs, ys, per_instance=False)
         
+        #For KL term, FIXME: currently we use enumerate to enumerate all xs
         if isinstance(self.qxy, Oracle):
             xps, _ = self.qxy.sample(self.Nsample, self.max_len)
         else:
             with torch.no_grad():     
-            #xs, _ = self.qxy.sample(ys, self.max_len, temp=self.temp)
-#                 ux    = np.unique(np.array(xs), axis=0).tolist()
-                xs = self.enumerate_xs()
-                xps   = batch_seqs(xs).to(inp.device)
-#                 print(xps.shape)
-#                 logprob_px = self.px.logprob(xps)
-        
-        if isinstance(self.qxy, Oracle):
-            point_kl = 0.0
-        else:
-            point_kl = 0
+                #xs, _ = self.qxy.sample(ys, self.max_len, temp=self.temp)
+                #ux    = np.unique(np.array(xs), axis=0).tolist()
+                xps  = batch_seqs(self.enumerate_xs()).to(inp.device)
+                #print(xps.shape)
+                #logprob_px = self.px.logprob(xps)
+         
+        #KL calculation
+        point_kl, cnt = 0., 0.
+        if not isinstance(self.qxy, Oracle):
             with torch.no_grad():   
                 logprob_px = self.px.logprob(xps)
             for y in ys.split(1,dim=1):
                 ybatch = y.repeat(1, xps.shape[1])
                 logprob_qxy = self.qxy.logprob(ybatch, xps)
-                qxdpx = logprob_qxy-logprob_px #include all xs in a 
-                point_kl += (torch.exp(logprob_qxy) * qxdpx).sum()
-                
-            point_kl = point_kl/self.Nsample
-    
-        self.loss_container.append(LossTrack(nll.item(), -logprob_pyx.item(), point_kl.item()))
+                point_kl += (torch.exp(logprob_qxy) * (logprob_qxy-logprob_px)).sum()
+                cnt+=1
+            point_kl = point_kl/cnt
         
-        return nll - self.lamda * (logprob_pyx - point_kl)
+        self.loss_container.append(LossTrack(nll.item(), -logprob_pyx.item(), point_kl.item()))
+        return nll - self.lamda * (logprob_pyx - 0.1 * point_kl)
 
     def sample_qxy(self, ys, temp=1.0):
         tokens, _ = self.qxy.sample(ys, self.max_len, temp=temp)        

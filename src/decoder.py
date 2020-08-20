@@ -383,7 +383,7 @@ class Decoder(nn.Module):
                 return None, None, None
 
             # sample
-            onehots = F.gumbel_softmax(logits, tau=temp, hard=False, dim=-1)
+            onehots = F.gumbel_softmax(logits, tau=temp, hard=True, dim=-1)
             toks = []
             for (i,row) in enumerate(onehots.split(1)):
                 choice = torch.argmax(row.detach()).item()

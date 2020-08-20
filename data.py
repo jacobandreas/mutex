@@ -182,3 +182,9 @@ class Oracle:
                 return batch_seqs(xs).to(self.device), None
             
         self.sample = oracle
+        
+        def vocab_y(self):
+            set([y for _,y in self.all_items])
+            
+        def vocab_x(self):
+            set([x for x,_ in self.all_items])
