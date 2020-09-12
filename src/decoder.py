@@ -3,29 +3,31 @@ import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
-
+from absl import app, flags
 from .attention import SimpleAttention
 from .utils import weight_top_p
-
+import pdb
 #_VF = torch._C._VariableFunctions
 EPS = 1e-7
+FLAGS = flags.FLAGS
 
 DecoderState = namedtuple("DecoderState", "feed rnn_state hiddens tokens")
 BeamState = namedtuple("BeamState", "feed rnn_state hiddens tokens score parent done")
 
 class Decoder(nn.Module):
     def __init__(
-            self, 
-            vocab, 
-            n_embed, 
-            n_hidden, 
-            n_layers, 
+            self,
+            vocab,
+            n_embed,
+            n_hidden,
+            n_layers,
             attention=None,
             copy=False,
             self_attention=False,
             dropout=0,
             rnntype=nn.LSTM,
             concat_feed=True,
+            MAXLEN=45,
     ):
         super().__init__()
 
@@ -36,6 +38,7 @@ class Decoder(nn.Module):
         self.copy = copy
         self.self_attention = self_attention
         self.rnntype=rnntype
+        self.MAXLEN = MAXLEN
         # attention
         if attention is None:
             attention = ()
@@ -58,9 +61,9 @@ class Decoder(nn.Module):
             self.rnn = self.rnntype(n_embed, n_hidden, n_layers)
         self.dropout_out = nn.Dropout(dropout)
         self.seq_picker = nn.Linear(n_hidden, len(attention))
-        self.nll = nn.CrossEntropyLoss(reduction='none') #FIXME: If I ignore pad, then logprob will be wrong and KL term might be wrong.
+        self.nll = nn.CrossEntropyLoss(reduction='none', ignore_index=vocab.pad())
         self.nllreduce = nn.CrossEntropyLoss(ignore_index=vocab.pad())
-            
+
     def step(
             self,
             decoder_state,
@@ -75,12 +78,12 @@ class Decoder(nn.Module):
             emb = torch.matmul(decoder_state.tokens, self.embed.weight)
         else:
             emb = self.embed(decoder_state.tokens[-1, :])
-            
+
         if self.concat_feed:
             inp = self.dropout_in(torch.cat((emb, decoder_state.feed), dim=1))
         else:
             inp = self.dropout_in(emb)
-        
+
 
         hidden, rnn_state = self.rnn(inp.unsqueeze(0), decoder_state.rnn_state)
         hiddens = torch.cat(decoder_state.hiddens + [hidden], dim=0)
@@ -96,7 +99,7 @@ class Decoder(nn.Module):
 
         # advance attention
         attended = [
-            attention(features, hidden, mask) 
+            attention(features, hidden, mask)
             for attention, features, mask in zip(
                 self.attention, att_features, att_masks
             )
@@ -105,14 +108,14 @@ class Decoder(nn.Module):
             summary, distribution = zip(*attended)
         else:
             summary = distribution = ()
-            
-            
+
+
         all_features = torch.cat([hidden] + list(summary), dim=2)
         comb_features = self.dropout_out(self.combine(all_features).squeeze(0))
         pred_logits = self.predict(comb_features)
-        
+
         assert not torch.isnan(pred_logits).any()
-        
+
         # copy mechanism
         ### if self.copy:
         ###     pred_probs = F.softmax(pred_logits, dim=1)
@@ -182,7 +185,11 @@ class Decoder(nn.Module):
             sampling = False
             master_self_att_proj = self._make_projection(ref_tokens)
             def token_picker(t, logits):
-                return ref_tokens[t, :], master_self_att_proj[:t+1, :, :]
+                if t < ref_tokens.shape[0]:
+                    return ref_tokens[t, :], master_self_att_proj[:t+1, :, :]
+                else:
+                    return None, None
+
 
         # attention
         if att_features is None:
@@ -204,23 +211,20 @@ class Decoder(nn.Module):
 
         # init
         pred = None
-        dummy_tokens, _ = token_picker(0, pred)
-        feed = dummy_tokens.new_zeros(
-            dummy_tokens.shape[0], self.n_hidden
+        tokens, self_att_proj = token_picker(0, pred)
+        feed = tokens.new_zeros(
+            tokens.shape[0], self.n_hidden
         ).float()
         hiddens = []
-        all_tokens = []
+        all_tokens = [tokens]
         all_preds = []
         all_extra = []
-
+        #device = self.embed.weight.device
+#        undone = torch.ones(dummy_tokens.shape[0], dtype=torch.bool, device=device)
         # iter
+        if FLAGS.debug:
+            print("max_len: ",max_len)
         for t in range(max_len):
-            tokens, self_att_proj = token_picker(t, pred)
-            
-            if tokens is None:
-                break
-
-            all_tokens.append(tokens)
             decoder_state = DecoderState(
                 feed, rnn_state, hiddens, torch.stack(all_tokens)
             )
@@ -233,13 +237,32 @@ class Decoder(nn.Module):
                 att_token_proj,
                 self_att_proj,
             )
-            
-            if  t == max_len-1-int(sampling): #FIXME: when sampling there is one more extra timestep
-                pred[:,self.vocab.eos()] += 99999
-                
+            if FLAGS.debug:
+                pdb.set_trace()
+
+            new_pred = torch.zeros_like(pred)
+            new_pred[:, self.vocab.pad():self.vocab.unk()+1]  -= 99999
+            new_pred[:, self.vocab.eos()] += 99999 # put eos back
+            pred = pred + new_pred
+
+            if  t == self.MAXLEN-1: #FIXME: when sampling there is one more extra timestep
+                new_pred = torch.zeros_like(pred)
+                new_pred[:, self.vocab.eos()] += 99999
+                pred = pred + new_pred
+
+            if FLAGS.debug:
+                pdb.set_trace()
+
             hiddens.append(hidden)
             all_preds.append(pred)
             all_extra.append(extra)
+
+            tokens, self_att_proj = token_picker(t+1, pred)
+
+            if tokens is None:
+                break
+
+            all_tokens.append(tokens)
 
         return (
             torch.stack(all_preds),
@@ -259,11 +282,10 @@ class Decoder(nn.Module):
             greedy=False,
             top_p=None,
             custom_sampler=None,
-           
     ):
-        
+
         device = self.embed.weight.device
-        
+
         # init
         if self.rnntype == nn.LSTM:
             if rnn_state is None:
@@ -274,11 +296,11 @@ class Decoder(nn.Module):
             if rnn_state is None:
                 rnnstate = torch.zeros(self.n_layers, n_batch, self.n_hidden).to(device)
             else:
-                n_batch = rnn_state.shape[1] 
+                n_batch = rnn_state.shape[1]
 
         done = [False for _ in range(n_batch)]
-        running_proj = torch.zeros(max_len, n_batch, len(self.vocab)).to(device)
-        running_out = torch.zeros(max_len, n_batch, dtype=torch.int64).to(device)
+        running_proj = torch.zeros(max_len+1, n_batch, len(self.vocab)).to(device)
+        running_out = torch.zeros(max_len+1, n_batch, dtype=torch.int64).to(device)
 
         def token_picker(t, logits):
             # first step
@@ -294,16 +316,23 @@ class Decoder(nn.Module):
                 return None, None
 
             # sample
+#             logits[np.invert(done).tolist(), self.vocab.pad()] -= 99999
+#             logits[np.invert(done).tolist(), self.vocab.pad()] -= 99999
+            new_pred = torch.zeros_like(logits)
+            new_pred[done, self.vocab.pad()] += 2*99999
+            logits = logits + new_pred
+
             probs = F.softmax(logits / temp, dim=-1)
             probs = probs.detach().cpu().numpy()
             tokens = []
             for i, row in enumerate(probs):
                 if done[i]:
                     tokens.append(self.vocab.pad())
-                    continue          
-                if self.copy:
-                    row[self.vocab.copy()] = 0
-                    
+                    continue
+
+                # if self.copy:
+                #     row[self.vocab.copy()] = 0
+
                 if custom_sampler is not None:
                     row = torch.tensor(row).unsqueeze(0)
                     choice = custom_sampler(row, running_out[:t])
@@ -315,6 +344,9 @@ class Decoder(nn.Module):
                 else:
                     row /= row.sum()
                     choice = np.random.choice(len(self.vocab), p=row)
+                    if FLAGS.debug:
+                        pdb.set_trace()
+                        print("choice: ", choice, " row: ", row, " logits: ", logits[i].detach().cpu().numpy())
                 tokens.append(choice)
                 if choice == self.vocab.eos():
                     done[i] = True
@@ -331,7 +363,7 @@ class Decoder(nn.Module):
             att_tokens=att_tokens,
             token_picker=token_picker
         )
-        tok_arr = tokens.detach().cpu().numpy().transpose()
+        tok_arr = tokens.detach().cpu().numpy().transpose()[:,1:]
         tok_out = []
         preds = F.log_softmax(preds, dim=-1)
         score_out = [0] * tok_arr.shape[0]
@@ -343,7 +375,7 @@ class Decoder(nn.Module):
                     score_out[i] += preds[t, i, c].item()
                 if c == self.vocab.eos():
                     break
-            tok_out.append(row_out)
+            tok_out.append([self.vocab.sos()]+row_out)
         return tok_out, score_out
 
     def sample_with_gumbel(self,
@@ -353,7 +385,7 @@ class Decoder(nn.Module):
                            att_features=None,
                            att_tokens=None,
                            temp=1.0):
-         
+
         device = self.embed.weight.device
         # init
         if self.rnntype == nn.LSTM:
@@ -365,13 +397,15 @@ class Decoder(nn.Module):
             if rnn_state == None:
                 rnnstate = torch.zeros(self.n_layers, n_batch, self.n_hidden).to(device)
             else:
-                n_batch = rnn_state.shape[1] 
+                n_batch = rnn_state.shape[1]
 
         done = [False] * n_batch
-        running_proj = torch.zeros(max_len, n_batch, len(self.vocab)).to(device)
-        running_out  = torch.zeros(max_len, n_batch, dtype=torch.int64).to(device)
+        running_proj = torch.zeros(max_len+1, n_batch, len(self.vocab)).to(device)
+        running_out  = torch.zeros(max_len+1, n_batch, dtype=torch.int64).to(device)
+
         def token_picker(t, logits):
             sos = self.vocab.sos()
+
             if t == 0:
                 toks = torch.LongTensor([sos] * n_batch).to(device)
                 onehots = F.one_hot(toks, num_classes=len(self.vocab)).float()
@@ -379,30 +413,35 @@ class Decoder(nn.Module):
                 running_out[0, range(n_batch)] = sos
                 return toks, running_proj[:1, :, :], onehots
 
-            if all(done):
+            if all(done) or t == self.MAXLEN:
                 return None, None, None
 
-            # sample
+            new_pred = torch.zeros_like(logits)
+            new_pred[done, self.vocab.pad()] += 2*99999
+            logits = logits + new_pred
+
             onehots = F.gumbel_softmax(logits, tau=temp, hard=True, dim=-1)
             toks = []
             for (i,row) in enumerate(onehots.split(1)):
                 choice = torch.argmax(row.detach()).item()
-                                
-                if self.copy:
-                    onehots[:,self.vocab.copy()] = 0   
-                    
-                    
-                if done[i]:
-                    onehots[i,choice] = 0
-                    onehots[i,self.vocab.pad()] = 1
-                    toks.append(self.vocab.pad())
-                    continue 
-                    
+
+                # if self.copy:
+                #     onehots[:,self.vocab.copy()] = 0
+
+                # if done[i]: #TODO: LOOK!
+                #     onehots[i,choice] = 0
+                #     onehots[i,self.vocab.pad()] = 1
+                #     toks.append(self.vocab.pad())
+                #     continue
+
+                if FLAGS.debug:
+                    pdb.set_trace()
+
                 toks.append(choice)
-                
+
                 if choice == self.vocab.eos():
                     done[i] = True
-                      
+
             toks = torch.LongTensor(toks).to(device)
             running_proj[t, range(n_batch), toks] = 1
             running_out[t, range(n_batch)] = toks
@@ -415,10 +454,11 @@ class Decoder(nn.Module):
             token_picker=token_picker
         )
 
-        logprob = (preds[:-1,:,:] * tokens[1:,:,:]).sum(dim=-1).sum(dim=0)
-        
+
+        logprob = (preds * tokens).sum(dim=-1).sum(dim=0)
+
         return tokens, logprob
-    
+
     def forward_onehot(self,
                        rnn_state,
                        max_len,
@@ -426,20 +466,24 @@ class Decoder(nn.Module):
                        att_features=None,
                        att_tokens=None,
                        token_picker=None):
-        
+
         sampling = True
         if token_picker is None:
             sampling = False
             master_self_att_proj = None
             def token_picker(t, logits):
-                onehots = ref_tokens[t, :, :]
-                tokens  = torch.argmax(onehots.detach(),dim=-1)
-                return tokens, None, onehots
-            
+                if t < ref_tokens.shape[0]:
+                    onehots = ref_tokens[t, :, :]
+                    tokens  = torch.argmax(onehots.detach(),dim=-1)
+                    return tokens, None, onehots
+                else:
+                    return None, None, None
+
+
         # attention
         if att_features is None:
             att_features = ()
-            att_tokens = () 
+            att_tokens = ()
             att_masks = ()
             att_token_proj = ()
         else:
@@ -456,27 +500,22 @@ class Decoder(nn.Module):
 
         # init
         pred = None
-        dummy_tokens, _ , dummy_onehots = token_picker(0, pred)
-        
-        feed = dummy_tokens.new_zeros(
-            dummy_tokens.shape[0], self.n_hidden
+        tokens, self_att_proj , onehots = token_picker(0, pred)
+        feed = tokens.new_zeros(
+            tokens.shape[0], self.n_hidden
         ).float()
-        
+
         hiddens = []
-        all_tokens = []
-        all_tokens_onehot = []
+        all_tokens = [tokens]
+        all_tokens_onehot = [onehots]
         all_preds = []
         all_extra = []
 
         # iter
+        if FLAGS.debug:
+            print("max_len: ",max_len)
+
         for t in range(max_len):
-            tokens, self_att_proj, onehots = token_picker(t, pred)
-            if tokens is None:
-                break
-                
-            all_tokens.append(tokens)
-            all_tokens_onehot.append(onehots)
-            
             decoder_state = DecoderState(
                 feed, rnn_state, hiddens, onehots
             )
@@ -489,48 +528,70 @@ class Decoder(nn.Module):
                 att_token_proj,
                 self_att_proj,
             )
-            
-            if  t == max_len-1-int(sampling): #FIXME: when sampling there is one more extra timestep
-                pred[:,self.vocab.eos()] += 99999
-                
+
+            new_pred = torch.zeros_like(pred)
+            new_pred[:, self.vocab.pad():self.vocab.unk()+1]  -= 99999
+            new_pred[:, self.vocab.eos()] += 99999 # put eos back
+            pred = pred + new_pred
+
+            if  t == self.MAXLEN-1: #FIXME: when sampling there is one more extra timestep
+                new_pred = torch.zeros_like(pred)
+                new_pred[:, self.vocab.eos()] += 99999
+                pred = pred + new_pred
+#                 pred[:,self.vocab.eos()] += 99999
+
+
             hiddens.append(hidden)
             all_preds.append(pred)
             all_extra.append(extra)
+
+            tokens, self_att_proj, onehots = token_picker(t+1, pred)
+
+            if tokens is None:
+                break
+
+            all_tokens.append(tokens)
+            all_tokens_onehot.append(onehots)
+
         return (
             torch.stack(all_preds),
             torch.stack(all_tokens_onehot, dim=0),
             rnn_state,
             list(zip(*all_extra))
         )
-    
+
     def logprob(self, ref_tokens, rnn_state=None):
         device = self.embed.weight.device
         n_batch = ref_tokens.shape[1]
-        if self.rnntype == nn.LSTM and rnn_state == None:
+        if self.rnntype == nn.LSTM and rnn_state is None:
                 rnnstate = tuple(torch.zeros(self.n_layers, n_batch, self.n_hidden).to(device) for _ in range(2))
-        elif rnn_state == None:
-                rnnstate = torch.zeros(self.n_layers, n_batch, self.n_hidden).to(device)        
-                
+        elif rnn_state is None:
+                rnnstate = torch.zeros(self.n_layers, n_batch, self.n_hidden).to(device)
+
         if len(ref_tokens.shape) == 3:
             out_src = ref_tokens[:-1, :, :]
             preds, _, _, *_ = self.forward_onehot(rnn_state,
-                                                  out_srcs.shape[0], 
+                                                  out_src.shape[0],
                                                   ref_tokens=out_src)
             out_tgt = ref_tokens[1:,:,:]
             ids = torch.argmax(out_tgt.detach(),dim=-1)
             out_mask = (ids != self.vocab.pad()).unsqueeze(2).float()
             logp = F.log_softmax(preds,dim=-1)
-            logprob = (logp * (out_tgt * out_mask)).sum(dim=-1).sum(dim=0)       
+            logprob = (logp * (out_tgt * out_mask)).sum(dim=-1).sum(dim=0)
         else:
             out_src = ref_tokens[:-1, :]
-            preds, _, _, *_ = self.forward(rnn_state, 
-                                           out_src.shape[0], 
+            preds, _, _, *_ = self.forward(rnn_state,
+                                           out_src.shape[0],
                                            ref_tokens=out_src)
+            logp = F.log_softmax(preds,dim=-1)
+            if FLAGS.debug:
+                print("preds here")
+                pdb.set_trace()
             out_tgt = ref_tokens[1:,:]
-            logprob = -self.nll(preds.permute(1,2,0), out_tgt.transpose(0,1)).sum(dim=-1)
+            logprob = -self.nll(logp.permute(1,2,0), out_tgt.transpose(0,1)).sum(dim=-1)
         return logprob
 
-    
+
     def beam(
             self,
             rnn_state,
@@ -577,7 +638,7 @@ class Decoder(nn.Module):
                 for i in range(len(beam[0].rnn_state))
             ]
             tokens = torch.LongTensor([
-                [s.tokens[tt] if tt < len(s.tokens) else s.tokens[-1] for s in beam] 
+                [s.tokens[tt] if tt < len(s.tokens) else s.tokens[-1] for s in beam]
                 for tt in range(t+1)
             ]).to(device)
             decoder_state = DecoderState(
