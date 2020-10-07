@@ -33,6 +33,7 @@ class Mutex(nn.Module):
                  qxy=None,
                  kl_lamda=1.0,
                  regularize=True,
+                 ent=0.0,
                 ):
 
         super().__init__()
@@ -46,6 +47,7 @@ class Mutex(nn.Module):
         self.temp = temp
         self.lamda = lamda
         self.kl_lamda = kl_lamda
+        self.ent = ent
         self.Nsample = Nsample
         self.MAXLEN_X = max_len_x
         self.MAXLEN_Y = max_len_y
@@ -141,14 +143,15 @@ class Mutex(nn.Module):
             for y in ys.split(1,dim=1):
                 ybatch = y.repeat(1, xps.shape[1])
                 logprob_qxy = self.qxy.logprob(ybatch, xps)
-                point_kl += (torch.exp(logprob_qxy) * (logprob_qxy-logprob_px)).sum()
-                #entropy  += (pqxy * logprob_qxy).sum()
+                pqxy = torch.exp(logprob_qxy)
+                point_kl += (pqxy * (logprob_qxy-logprob_px)).sum()
+                entropy  += (pqxy * logprob_qxy).sum()
             point_kl = point_kl / self.Nsample
-            #entropy  = entropy/cnt
+            entropy  = entropy /  self.Nsample
 
         self.loss_container.append(LossTrack(nll.item(), -logprob_pyx.item(), point_kl.item()))
 
-        return nll - self.lamda * (logprob_pyx  - self.kl_lamda * point_kl)
+        return nll - self.lamda * (logprob_pyx  - self.kl_lamda * point_kl) + self.ent * entropy 
 
     def sample_qxy(self, ys, temp=1.0):
         tokens, _ = self.qxy.sample(ys, self.MAXLEN_X, temp=temp)

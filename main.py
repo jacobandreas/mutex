@@ -23,6 +23,7 @@ flags.DEFINE_float("temp", 1.0, "temperature for samplings")
 flags.DEFINE_float("dropout", 0.05, "dropout")
 flags.DEFINE_float("lamda", 0.1, "lambda")
 flags.DEFINE_float("kl_lamda", 1.0, "extra lambda for kl")
+flags.DEFINE_float("ent", 0.0, "qx|y entropy")
 flags.DEFINE_string("save_model", "model.m", "model save location")
 flags.DEFINE_integer("seed", 10, "random seed")
 flags.DEFINE_bool("debug", False, "debug mode")
@@ -248,6 +249,7 @@ def main(argv):
                   Nsample=FLAGS.Nsample,
                   temp=FLAGS.temp,
                   regularize=FLAGS.regularize,
+                  ent=FLAGS.ent,
                  ).to(DEVICE)
 
     if FLAGS.regularize and not isinstance(model.px,Oracle):
