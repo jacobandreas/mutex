@@ -73,7 +73,7 @@ class EncDec(nn.Module):
 
     def forward(self, inp, out, per_instance=False):
         hid, state = self.encoder(inp)
-        hid = self.proj(hid)
+        #hid = self.proj(hid)
         state = self.pass_hiddens(state)
         out_src = out[:-1, :]
 
@@ -96,8 +96,15 @@ class EncDec(nn.Module):
 
     def logprob(self, inp, out):
         hid, state = self.encoder(inp)
-        hid = self.proj(hid)
+        #hid = self.proj(hid)
         return self.decoder.logprob(out, rnn_state=self.pass_hiddens(state))
+    
+    def logprob_interleaved(self, inp, out):
+        hid, state = self.encoder(inp)
+        sbatch     = [s.repeat_interleave(out.shape[1],dim=1) for s in self.pass_hiddens(state)]
+        outbatch     = out.repeat(1, inp.shape[1])
+        return self.decoder.logprob(outbatch, rnn_state=sbatch).view(inp.shape[1],out.shape[1])
+            #xbatch = xps.repeat_interleav(ys.shape[1],1)
 
     def sample(
             self,

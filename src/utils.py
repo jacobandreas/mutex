@@ -3,8 +3,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-
-
 def batch_seqs(seqs):
     max_len = max(len(s) for s in seqs)
     data = np.zeros((max_len, len(seqs)))
@@ -26,3 +24,8 @@ def weight_top_p(vec, p):
 
     out /= out.sum()
     return out
+
+def trim(L, obj):
+    if obj in L:
+        return L[:L.index(obj)+1]
+    return L

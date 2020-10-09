@@ -219,10 +219,10 @@ def main(argv):
         max_len_x = 2
         max_len_y = 2
 
-    hlog.value("vocab_x", vocab_x)
-    hlog.value("vocab_y", vocab_y)
-    hlog.value("study", study)
-    hlog.value("test", test)
+    hlog.value("vocab_x\n", vocab_x)
+    hlog.value("vocab_y\n", vocab_y)
+    hlog.value("study\n", study)
+    hlog.value("test\n", test)
 
 
     train_items, test_items = encode(study,vocab_x, vocab_y), encode(test,vocab_x, vocab_y)
@@ -260,10 +260,10 @@ def main(argv):
 
 
     with hlog.task("Initial Samples"):
-        hlog.value("px samples",  "\n".join(model.sample_px(20)))
-        hlog.value("py samples",  "\n".join(model.sample_py(20)))
-        hlog.value("qxy debug samples", "\n".join(model.sample_qxy_debug(N=20)))
-        hlog.value("qxy debug data", "\n".join(model.sample_qxy_debug_data(train_items + test_items)))
+        hlog.value("px samples\n",  "\n".join(model.sample_px(20)))
+        hlog.value("py samples\n",  "\n".join(model.sample_py(20)))
+        hlog.value("qxy debug samples\n", "\n".join(model.sample_qxy_debug(N=20)))
+        hlog.value("qxy debug data\n", "\n".join(model.sample_qxy_debug_data(train_items + test_items)))
 #         hlog.value("qxy samples", "\n".join(model.sample_qxy(model.py.sample(20,max_len),temp=model.temp)))
 #         hlog.value("qxy samples (gumbel)", "\n".join(model.sample_qxy_gumbel(model.py.sample(20,max_len),temp=model.temp)))
 
@@ -278,11 +278,11 @@ def main(argv):
         acc, f1 = train(model, train_items, test_items)
 
     with hlog.task("Final Samples"):
-        hlog.value("px samples", "\n".join(model.sample_px(20)))
-        hlog.value("py samples", "\n".join(model.sample_py(20)))
-        hlog.value("qxy debug samples", "\n".join(model.sample_qxy_debug(N=20)))
-        hlog.value("qxy debug data", "\n".join(model.sample_qxy_debug_data(train_items + test_items)))
-        hlog.value("qxy samples (gumbel)", "\n".join(model.sample_qxy_gumbel(model.py.sample(20,max_len_y),temp=model.temp)))
+        hlog.value("px samples\n", "\n".join(model.sample_px(20)))
+        hlog.value("py samples\n", "\n".join(model.sample_py(20)))
+        hlog.value("qxy debug samples\n", "\n".join(model.sample_qxy_debug(N=20)))
+        hlog.value("qxy debug data\n", "\n".join(model.sample_qxy_debug_data(train_items + test_items)))
+        hlog.value("qxy samples (gumbel)\n", "\n".join(model.sample_qxy_gumbel(model.py.sample(20,max_len_y),temp=model.temp)))
         #hlog.value("qxy samples", "\n".join(model.sample_qxy(model.py.sample(20,max_len),temp=model.temp)))
 
     if FLAGS.regularize:

@@ -4,8 +4,9 @@ from contextlib import contextmanager
 import logging
 import threading
 import time
+import sys
 
-console = logging.StreamHandler()
+console = logging.StreamHandler(stream=sys.stdout)
 console.setLevel(logging.INFO)
 # set a format which is simpler for console use
 formatter = logging.Formatter('%(asctime)s [%(filename)s:%(lineno)d] %(message)s', "%H:%M:%S")
@@ -15,8 +16,11 @@ console.setFormatter(formatter)
 logging.getLogger('hlog').addHandler(console)
 # Now, we can log to the root logger, or any other logger. First the root..
 logger = logging.getLogger('hlog')  # Loggerr
+# logger.setLevel(logging.INFO)
+# logger.handlers[0].stream = sys.stdout
 logger.propagate = False
 
+print(logger.handlers)
 
 state = threading.local()
 state.path = []

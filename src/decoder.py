@@ -5,7 +5,7 @@ from torch import nn
 import torch.nn.functional as F
 from absl import app, flags
 from .attention import SimpleAttention
-from .utils import weight_top_p
+from .utils import weight_top_p, trim
 import pdb
 #_VF = torch._C._VariableFunctions
 EPS = 1e-7
@@ -282,6 +282,7 @@ class Decoder(nn.Module):
             greedy=False,
             top_p=None,
             custom_sampler=None,
+            calc_score=False,
     ):
 
         device = self.embed.weight.device
@@ -366,17 +367,22 @@ class Decoder(nn.Module):
         tok_arr = tokens.detach().cpu().numpy().transpose()[:,1:]
         tok_out = []
         preds = F.log_softmax(preds, dim=-1)
-        score_out = [0] * tok_arr.shape[0]
-        for i, row in enumerate(tok_arr):
-            row_out = []
-            for t, c in enumerate(row):
-                row_out.append(int(c))
-                if c != self.vocab.pad():
-                    score_out[i] += preds[t, i, c].item()
-                if c == self.vocab.eos():
-                    break
-            tok_out.append([self.vocab.sos()]+row_out)
+        if calc_score:
+            score_out = [0] * tok_arr.shape[0]
+            for i, row in enumerate(tok_arr):
+                row_out = []
+                for t, c in enumerate(row):
+                    row_out.append(int(c))
+                    if c != self.vocab.pad():
+                        score_out[i] += preds[t, i, c].item()
+                    if c == self.vocab.eos():
+                        break
+                tok_out.append([self.vocab.sos()]+row_out)
+        else:
+            tok_out = [[self.vocab.sos()]+trim(row.tolist(),self.vocab.eos()) for i, row in enumerate(tok_arr)]
+            score_out = None
         return tok_out, score_out
+
 
     def sample_with_gumbel(self,
                            rnn_state,
@@ -384,7 +390,8 @@ class Decoder(nn.Module):
                            n_batch=1,
                            att_features=None,
                            att_tokens=None,
-                           temp=1.0):
+                           temp=1.0,
+                           calc_score=False):
 
         device = self.embed.weight.device
         # init
@@ -453,10 +460,13 @@ class Decoder(nn.Module):
             att_tokens=att_tokens,
             token_picker=token_picker
         )
-
-
-        logprob = (preds * tokens).sum(dim=-1).sum(dim=0)
-
+    
+        
+        if calc_score:
+            logprob = (preds * tokens).sum(dim=-1).sum(dim=0)
+        else:
+            logprob = None
+            
         return tokens, logprob
 
     def forward_onehot(self,

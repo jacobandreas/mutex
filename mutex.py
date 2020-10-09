@@ -4,11 +4,11 @@ from torch import nn
 import torch.nn.functional as F
 from src import EncDec, Decoder, Vocab, batch_seqs, weight_top_p
 import random
-from data import Oracle, collate
+from data import Oracle, collate, eval_format
 import collections
 from itertools import combinations, product
 import math
-
+import pdb
 LossTrack = collections.namedtuple('LossTrack', 'nll mlogpyx pointkl')
 
 class Mutex(nn.Module):
@@ -135,20 +135,33 @@ class Mutex(nn.Module):
                 #print(xps.shape)
                 #logprob_px = self.px.logprob(xps)
 
-        #KL calculation
+#         #KL calculation
         point_kl, entropy = 0., 0.
         if not isinstance(self.qxy, Oracle):
             with torch.no_grad():
-                logprob_px = self.px.logprob(xps)
-            for y in ys.split(1,dim=1):
-                ybatch = y.repeat(1, xps.shape[1])
-                logprob_qxy = self.qxy.logprob(ybatch, xps)
-                pqxy = torch.exp(logprob_qxy)
-                point_kl += (pqxy * (logprob_qxy-logprob_px)).sum()
-                entropy  += (pqxy * logprob_qxy).sum()
-            point_kl = point_kl / self.Nsample
-            entropy  = entropy /  self.Nsample
+                logprob_px = self.px.logprob(xps).unsqueeze(0)
+            
+           # for y in ys.split(1,dim=1):
+            #ybatch = ys.repeat(1, xps.shape[1])
+            #xbatch = xps.repeat_interleave(ys.shape[1],1)
+            logprob_qxy = self.qxy.logprob_interleaved(ys, xps)
+            pqxy = torch.exp(logprob_qxy)
+            point_kl = (pqxy * (logprob_qxy - logprob_px)).sum(dim=1).mean()
+            entropy = (pqxy * logprob_qxy).sum(dim=1).mean()
 
+#         point_kl, entropy = 0., 0.
+#         if not isinstance(self.qxy, Oracle):
+#             with torch.no_grad():
+#                 logprob_px = self.px.logprob(xps)
+#             for y in ys.split(1,dim=1):
+#                 ybatch = y.repeat(1, xps.shape[1])
+#                 logprob_qxy = self.qxy.logprob(ybatch, xps)
+#                 pqxy = torch.exp(logprob_qxy)
+#                 point_kl += (pqxy * (logprob_qxy-logprob_px)).sum()
+#                 entropy  += (pqxy * logprob_qxy).sum()
+#             point_kl = point_kl / self.Nsample
+#             entropy  = entropy /  self.Nsample
+#         pdb.set_trace()
         self.loss_container.append(LossTrack(nll.item(), -logprob_pyx.item(), point_kl.item()))
 
         return nll - self.lamda * (logprob_pyx  - self.kl_lamda * point_kl) + self.ent * entropy 
@@ -193,8 +206,7 @@ class Mutex(nn.Module):
         return self.print_tokens(self.vocab_y, tokens)
 
     def print_tokens(self, vocab, tokens):
-        return [" ".join(vocab.decode(tokens[i]))
-                    for i in range(len(tokens))]
+        return [" ".join(eval_format(vocab, tokens[i])) for i in range(len(tokens))]
 
     def sample(self, *args, **kwargs):
         return self.pyx.sample(*args, **kwargs)
@@ -220,7 +232,7 @@ class Mutex(nn.Module):
             sys = self.print_tokens(self.vocab_y,ys)
             plist = []
             for (x,y,lqxy, lpx, lpyx) in zip(sxs, sys, logprob_qxy, logprob_px, logprob_pyx):
-                plist.append(f"x: {x} \t y: {y} \t logpqxy: {lqxy} \t logpx: {lpx} \t logpyx {lpyx}")
+                plist.append(f"x: {x} \ny: {y} \nlogpqxy: {lqxy} \t logpx: {lpx} \t logpyx {lpyx}")
             return plist
 
     def sample_qxy_debug_data(self, data):
@@ -237,5 +249,5 @@ class Mutex(nn.Module):
             sys = self.print_tokens(self.vocab_y, ys)
             plist = []
             for (x,y,lqxy, lpx, lpyx) in zip(sxs, sys, logprob_qxy, logprob_px, logprob_pyx):
-                plist.append(f"x: {x} \t y: {y} \t logpqxy: {lqxy} \t logpx: {lpx} \t logpyx {lpyx}")
+                plist.append(f"x: {x} \ny: {y}\nlogpqxy: {lqxy} \t logpx: {lpx} \t logpyx {lpyx}")
             return plist

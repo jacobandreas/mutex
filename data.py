@@ -15,6 +15,7 @@ def encode(data,vocab_x, vocab_y):
         encoded.append(( [vocab_x.sos()]  + vocab_x.encode(inp) + [vocab_x.eos()], [vocab_y.sos()] + vocab_y.encode(out) + [vocab_y.eos()]))
     return encoded
 
+    
 def eval_format(vocab, seq):
     if vocab.eos() in seq:
         seq = seq[:seq.index(vocab.eos())+1]
@@ -59,13 +60,13 @@ def generate_fig2_exp(input_symbols, output_symbols):
         fnames    = random.sample(input_symbols - words,3)
         fmap      = dict(zip([f1,f2,f3], fnames))
 
-        # words  = ["red", "blue", "green", "yellow"]
-        # colors = ["RED","BLUE","GREEN","YELLOW"]
-        # colormap = dict(zip(words, colors))
-        # fnames = ["thrice", "around", "after"]
-        # fmap  = dict(zip([f1,f2,f3], fnames))
-        # words  = set(words)
-        # colors = set(colors)
+#         words  = ["red", "blue", "green", "yellow"]
+#         colors = ["RED","BLUE","GREEN","YELLOW"]
+#         colormap = dict(zip(words, colors))
+#         fnames = ["thrice", "around", "after"]
+#         fmap  = dict(zip([f1,f2,f3], fnames))
+#         words  = set(words)
+#         colors = set(colors)
         print("color map: ", colormap)
         print("function names: ", fnames)
 
